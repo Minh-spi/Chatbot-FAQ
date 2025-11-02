@@ -1,0 +1,14 @@
+# Bỏ qua môi trường ảo
+venv/
+
+# Cache của Python
+__pycache__/
+*.pyc
+
+# Cấu hình IDE
+.vscode/
+.idea/
+
+# File hệ thống
+.DS_Store
+Thumbs.db
