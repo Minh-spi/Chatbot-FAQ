@@ -5,16 +5,16 @@ import math
 import os
 import csv
 
-# ĐỌC CƠ SỞ TRI THỨC TỪ FILE CSV
+# CƠ SỞ TRI THỨC Q&A (ĐỌC TỪ FILE)
 knowledge_base = []
 with open('knowledge_base.csv', 'r', encoding='utf-8') as f:
     reader = csv.reader(f)
-    next(reader, None)
+    next(reader)
     for row in reader:
-        if len(row) >= 2:
-            knowledge_base.append((row[0], row[1]))
+        knowledge_base.append((row[0], row[1]))
 
-# HÀM TF-IDF VÀ TÍNH TOÁN TƯƠNG ĐỒNG COSINE
+
+# HÀM XỬ LÝ TF-IDF
 def tokenize(text):
     return text.lower().split()
 
@@ -48,68 +48,71 @@ def cosine_similarity(vec1, vec2):
     norm2 = math.sqrt(sum(v*v for v in vec2.values()))
     return dot / (norm1 * norm2 + 1e-9)
 
-# KHỞI TẠO CHROMADB VÀ TẢI CƠ SỞ DỮ LIỆU VECTORS
-@st.cache_resource
-def load_vector_db():
-    persist_dir = os.path.join(os.getcwd(), "chroma_persist")
-    client = chromadb.PersistentClient(path=persist_dir)
+# KHỞI TẠO VECTOR DB (Chroma)
+# Thư mục lưu vector database
+persist_dir = os.path.join(os.getcwd(), "chroma_persist")
+# Khởi tạo client có lưu trữ
+client = chromadb.PersistentClient(path=persist_dir)
+# Xóa collection cũ nếu có, rồi tạo mới
+# Lấy hoặc tạo mới collection
+try:
+    collection = client.get_collection("faq")
+except:
+    collection = client.create_collection("faq")
 
-    try:
-        collection = client.get_collection("faq")
-    except:
-        collection = client.create_collection("faq")
+# Tạo vector TF-IDF cho các câu hỏi
+questions = [q for q, _ in knowledge_base]
+idf = compute_idf(questions)
+vectors = [compute_tfidf(q, idf) for q in questions]
 
-    # Nếu collection rỗng thì thêm dữ liệu mới
-    if collection.count() == 0:
-        questions = [q for q, _ in knowledge_base]
-        idf = compute_idf(questions)
-        vectors = [compute_tfidf(q, idf) for q in questions]
-        for i, q in enumerate(questions):
-            collection.add(
-                ids=[str(i)],
-                documents=[q],
-                metadatas=[{"answer": knowledge_base[i][1]}]
-            )
-    return client, collection
+# Lưu vào ChromaDB
+# Lưu vào ChromaDB (xóa dữ liệu cũ nếu có)
+try:
+    client.delete_collection("faq")
+except:
+    pass
+collection = client.create_collection("faq")
 
-client, collection = load_vector_db()
+for i, q in enumerate(questions):
+    collection.add(
+        ids=[str(i)],
+        documents=[q],
+        metadatas=[{"answer": knowledge_base[i][1]}]
+    )
 
-# TÍNH TF-IDF CHO CÂU HỎI TRONG CƠ SỞ TRI THỨC
-@st.cache_data
-def prepare_vectors():
-    questions = [q for q, _ in knowledge_base]
-    idf = compute_idf(questions)
-    vectors = [compute_tfidf(q, idf) for q in questions]
-    return idf, vectors
-
-idf, vectors = prepare_vectors()
 
 # GIAO DIỆN CHATBOT
 st.title("🤖 ElectroStore Chatbot")
 st.write("Chào mừng bạn đến với ElectroStore! Hỏi gì cũng được nè 😄")
 
+# Khởi tạo lịch sử chat nếu chưa có
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Hiển thị các tin nhắn đã có trong lịch sử
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+# Nhận input từ người dùng
 if prompt := st.chat_input("Nhập câu hỏi của bạn:"):
+    # 1. Thêm tin nhắn của người dùng vào lịch sử và hiển thị
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
+    # 2. Xử lý và lấy câu trả lời từ bot
     user_vec = compute_tfidf(prompt, idf)
     sims = [cosine_similarity(user_vec, v) for v in vectors]
     best_idx = int(np.argmax(sims))
     best_sim = sims[best_idx]
 
     if best_sim < 0.2:
-        response = "Không có câu trả lời!"
+        response = "Xin lỗi, tôi không tìm thấy câu trả lời cho câu hỏi này."
     else:
         response = knowledge_base[best_idx][1]
 
+    # 3. Thêm câu trả lời của bot vào lịch sử và hiển thị
     st.session_state.messages.append({"role": "assistant", "content": response})
     with st.chat_message("assistant"):
         st.markdown(response)
